@@ -43,18 +43,32 @@ bool EntityBars::OnInitialize()
 		return false;
 	}
 
+	LOG_INFO("ptr address: " << static_cast<const void*>(ptr));
+
+	char buffer[128];
+	snprintf(buffer, sizeof(buffer), "ptr address: %p\n", static_cast<void*>(ptr));
+	OutputDebugStringA(buffer);
+
+
 	ptr = ptr + 0x20; // Move ptr to the call parameter
 	int offset = *(int*)ptr; // Read the function offset
 	ptr = ptr + sizeof(int); // Move ptr to the next instruction (after call)
 	ptr = ptr + offset; // Move ptr to the function address (in this case it's a vtable pointer)
-	if (*ptr != (char)0xE9) // This must be a jmp instruction, we are looking for a vtable reference here
+	// Некоторые версии используют промежуточный JMP,
+// другие вызывают тело функции напрямую.
+	if (static_cast<unsigned char>(*ptr) == 0xE9)
 	{
-		LOG_ERROR("Failed to locate GetLockOnSystem function address");
+		offset = *(int*)(ptr + 1);
+		ptr = ptr + 5 + offset;
+	}
+
+	// Проверяем ожидаемое начало функции перед чтением смещения.
+	if (memcmp(ptr, "\x48\x83\xEC\x28\x48\x8B\x05", 7) != 0)
+	{
+		LOG_ERROR("Unexpected GetLockOnSystem function layout");
 		return false;
 	}
-	offset = *(int*)(++ptr); // Inc ptr and read the function offset
-	ptr = ptr + sizeof(int); // Move ptr to the next instruction
-	ptr = ptr + offset; // Move ptr to the begining of the function
+
 	ptr = ptr + 7; // Move ptr to the offset of the static pointer
 	offset = *(int*)ptr; // Read the offset of the static pointer
 	ptr = ptr + sizeof(int); // Move ptr to the next instruction (after mov)
@@ -70,8 +84,7 @@ bool EntityBars::OnInitialize()
 	ptr = utility::PatternScan(GET_MAX_DURABILITY_FN_SIG, sizeof(GET_MAX_DURABILITY_FN_SIG), hExec, sizeExec.value_or(0));
 	if (ptr == nullptr)
 	{
-		LOG_ERROR("Failed to find GetMaxDurability function signature");
-		return false;
+		LOG_WARNING("GetMaxDurability signature not found; weapon durability display disabled");
 	}
 
 	fnGetMaxDurability = (GetMaxDurability)ptr;
@@ -213,8 +226,8 @@ void EntityBars::ShowElementalBuildup(const ImVec2& progressBarSize)
 		if (e < E_TYPE::FIRE || e > E_TYPE::COUNT - 1) // Skip unsupported types
 			continue;
 
-		E_BAR_LIST[e].fValues[0] = *(float*)(itemAddr + 0x258); // Current buildup
-		E_BAR_LIST[e].fValues[1] = *(float*)(itemAddr + 0x254); // Max buildup
+		E_BAR_LIST[e].fValues[0] = *(float*)(itemAddr + 0x260); // Current buildup (verified with acid hits)
+		E_BAR_LIST[e].fValues[1] = *(float*)(itemAddr + 0x25C); // Max buildup
 		//E_BAR_LIST[e].fValues[1] = (float)*(int*)(target.statList.pList + E_RESIST_OFFSET[e]); // Max buildup
 		//bIsDebuffActive = (E_BAR_LIST[e].fValues[0] == E_BAR_LIST[e].fValues[1]); // Check if debuff is active
 		bIsDebuffActive = (E_BAR_LIST[e].fValues[1] == 0.0f); // Check if debuff is active
@@ -250,6 +263,9 @@ void EntityBars::ShowElementalBuildup(const ImVec2& progressBarSize)
 
 void EntityBars::ShowWeaponsDurability(int iValues[], const ImVec2& progressBarSize)
 {
+	if (fnGetMaxDurability == nullptr)
+		return;
+
 	char* pWeapon;
 	bool bShowHeader = true;
 
@@ -438,10 +454,17 @@ void EntityBars::OnDraw()
 	//target.pBase -= 0x10;
 
 	// Get entity's StatComponent
-	uintptr_t ptr = *(uintptr_t*)(target.pBase + 0x848);
+	uintptr_t ptr = *(uintptr_t*)(target.pBase + 0x8C0);
+
+	if (ptr == 0)
+		return;
+	
+	uintptr_t statData = *(uintptr_t*)(ptr + 0xE0);
+	if (statData == 0)
+		return;
 
 	// Filter out incomplete StatLists
-	target.statList = *(LIST_DATA*)(*(uintptr_t*)(ptr + 0xE0) + 0x28);
+	target.statList = *(LIST_DATA*)(statData + 0x28);
 	if (target.statList.iSize < 130)
 		return;
 
@@ -450,12 +473,15 @@ void EntityBars::OnDraw()
 	target.maxStatMulList = *(LIST_DATA*)(*(uintptr_t*)(ptr + 0xE0) + 0x58);
 
 	// Get entity's AbnormalComponent
-	ptr = *(uintptr_t*)(target.pBase + 0x850);
+	ptr = *(uintptr_t*)(target.pBase + 0x8C8); // my experiments
 	target.abnormalStatList = *(LIST_DATA*)(ptr + 0xD0);
 
-	// Get entity's EquipmentComponent
-	ptr = *(uintptr_t*)(target.pBase + 0x858);
-	target.weaponList = *(LIST_DATA*)(ptr + 0xF8); // 0xF8 for 1.3.0 and 0xF0 for 1.2.0
+	if (fnGetMaxDurability != nullptr)
+	{
+		// Get entity's EquipmentComponent only when durability is available.
+		ptr = *(uintptr_t*)(target.pBase + 0x858);
+		target.weaponList = *(LIST_DATA*)(ptr + 0xF8); // 0xF8 for 1.3.0 and 0xF0 for 1.2.0
+	}
 
 	//FVector headTag = *(FVector*)(target.pBase + 0x149C);
 	//FVector entityPos = *(FVector*)(*(uintptr_t*)(target.pBase + 0xF0) + 0x10C);

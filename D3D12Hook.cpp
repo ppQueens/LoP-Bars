@@ -10,6 +10,12 @@
 #include "WindowFilter.hpp"
 #include "D3D12Hook.hpp"
 
+namespace
+{
+	constexpr DWORD diagnosticHookDelayMs = 5000; // Set to 0 for the comparison run.
+
+}
+
 D3D12Hook::~D3D12Hook()
 {
 	Unhook();
@@ -314,6 +320,7 @@ bool D3D12Hook::Hook()
 		}
 	}
 
+	Sleep(diagnosticHookDelayMs);
 	utility::ThreadSuspender threadSuspender;
 
 	try
