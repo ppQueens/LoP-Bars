@@ -24,13 +24,20 @@ LoPBars::LoPBars() : iD3D12(), hWnd(0), bIsInitialized(false), initAttemptCount(
 			throw std::exception("Failed to initialize due to an incompatible version of the game. Check for an update.");
 		}
 	}
-
+	//Sleep(1000);
 	if (!HookD3D12())
 	{
 		LOG_ERROR("Failed to hook D3D12. Retrying in 3 seconds...");
 		Sleep(3000);
 		if (!HookD3D12())
 		{
+			MessageBoxA(
+				nullptr,
+				"Diagnostic build: D3D12 hooks disabled",
+				"LoP Bars",
+				MB_OK
+			);
+
 			LOG_ERROR("Failed to hook D3D12.");
 			throw std::exception("Failed to hook D3D12. This could be a conflict with another active overlay.");
 		}
